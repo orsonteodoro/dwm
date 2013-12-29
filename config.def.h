@@ -104,7 +104,7 @@ static char dmenumon[2] = "0"; /* component of dmenucmd, manipulated in spawn() 
 #if USE_XLIB
 static const char *dmenucmd[] = { "dmenu_run", "-m", dmenumon, "-fn", font, "-nb", normbgcolor, "-nf", normfgcolor, "-sb", selbgcolor, "-sf", selfgcolor, NULL };
 #elif USE_WINAPI
-static const char *dmenucmd[] = { "dmenu_run_win", "-m", dmenumon, "-fn", font, "-nb", normbgcolor, "-nf", normfgcolor, "-sb", selbgcolor, "-sf", selfgcolor, NULL };
+static const char *dmenucmd[] = { "dmenu.bat", "-m", dmenumon, "-fn", font, "-nb", normbgcolor, "-nf", normfgcolor, "-sb", selbgcolor, "-sf", selfgcolor, NULL };
 #endif
 #if USE_XLIB
 static const char *termcmd[]  = { "st", NULL };
