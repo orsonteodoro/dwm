@@ -10,6 +10,40 @@
 #define Display void*
 #define true TRUE
 #define false FALSE
+#define Button1 WM_LBUTTONDOWN
+#define Button3 WM_RBUTTONDOWN
+#define Button2 WM_MBUTTONDOWN
+#define XK_p 'P'
+#define XK_Return VK_RETURN
+#define XK_b 'B'
+#define XK_j 'J'
+#define XK_k 'K'
+#define XK_i 'I'
+#define XK_d 'D'
+#define XK_h 'H'
+#define XK_l 'L'
+#define XK_Tab VK_TAB
+#define XK_c 'C'
+#define XK_t 'T'
+#define XK_f 'F'
+#define XK_m 'M'
+#define XK_space VK_SPACE
+#define XK_0 '0'
+#define XK_comma VK_OEM_COMMA
+#define XK_period VK_OEM_PERIOD
+#define XK_1 '1'
+#define XK_2 '2'
+#define XK_3 '3'
+#define XK_4 '4'
+#define XK_5 '5'
+#define XK_6 '6'
+#define XK_7 '7'
+#define XK_8 '8'
+#define XK_9 '9'
+#define XK_q 'Q'
+#define ShiftMask MOD_SHIFT
+#define ControlMask MOD_CONTROL
+#define Mod1Mask (MOD_CONTROL | MOD_ALT)
 #endif
 
 /* appearance */
@@ -55,25 +89,12 @@ static const Layout layouts[] = {
 };
 
 /* key definitions */
-#if USE_XLIB
 #define MODKEY Mod1Mask
-#elif USE_WINAPI
-#define MODKEY 		(MOD_CONTROL | MOD_ALT)
-#endif
-#if USE_XLIB
 #define TAGKEYS(KEY,TAG) \
 	{ MODKEY,                       KEY,      view,           {.ui = 1 << TAG} }, \
 	{ MODKEY|ControlMask,           KEY,      toggleview,     {.ui = 1 << TAG} }, \
 	{ MODKEY|ShiftMask,             KEY,      tag,            {.ui = 1 << TAG} }, \
 	{ MODKEY|ControlMask|ShiftMask, KEY,      toggletag,      {.ui = 1 << TAG} },
-#elif USE_WINAPI
-#define TAGKEYS(KEY,TAG) \
-	{ MODKEY,                       KEY,      view,           {.ui = 1 << TAG} }, \
-	{ MODKEY|MOD_CONTROL,           KEY,      toggleview,     {.ui = 1 << TAG} }, \
-	{ MODKEY|MOD_SHIFT,             KEY,      tag,            {.ui = 1 << TAG} }, \
-	{ MODKEY|MOD_CONTROL|MOD_SHIFT, KEY,      toggletag,      {.ui = 1 << TAG} },
-#endif
-
 
 /* helper for spawning shell commands in the pre dwm-5.0 fashion */
 #define SHCMD(cmd) { .v = (const char*[]){ "/bin/sh", "-c", cmd, NULL } }
@@ -91,7 +112,6 @@ static const char *termcmd[]  = { "st", NULL };
 static const char *termcmd[]  = { "cmd.exe", NULL };
 #endif
 
-#if USE_XLIB
 static Key keys[] = {
 	/* modifier                     key        function        argument */
 	{ MODKEY,                       XK_p,      spawn,          {.v = dmenucmd } },
@@ -111,6 +131,10 @@ static Key keys[] = {
 	{ MODKEY,                       XK_m,      setlayout,      {.v = &layouts[2]} },
 	{ MODKEY,                       XK_space,  setlayout,      {0} },
 	{ MODKEY|ShiftMask,             XK_space,  togglefloating, {0} },
+#if USE_WINAPI
+	{ MODKEY,                       0x4E/*n*/,       toggleborder,        {0} },
+	{ MODKEY,                       0x45/*e*/,       toggleexplorer,      {0} },
+#endif	
 	{ MODKEY,                       XK_0,      view,           {.ui = ~0 } },
 	{ MODKEY|ShiftMask,             XK_0,      tag,            {.ui = ~0 } },
 	{ MODKEY,                       XK_comma,  focusmon,       {.i = -1 } },
@@ -128,49 +152,10 @@ static Key keys[] = {
 	TAGKEYS(                        XK_9,                      8)
 	{ MODKEY|ShiftMask,             XK_q,      quit,           {0} },
 };
-#elif USE_WINAPI
-static Key keys[] = {
-	/* modifier                     key        function        argument */
-	{ MODKEY,                       0x50/*XK_p*/,      spawn,          {.v = dmenucmd } },
-	{ MODKEY|MOD_SHIFT,             VK_RETURN/*XK_Return*/, spawn,          {.v = termcmd } },
-	{ MODKEY,                       0x42/*XK_b*/,      togglebar,      {0} },
-	{ MODKEY,                       0x4A/*XK_j*/,      focusstack,     {.i = +1 } },
-	{ MODKEY,                       0x4B/*XK_k*/,      focusstack,     {.i = -1 } },
-	{ MODKEY,                       0x49/*XK_i*/,      incnmaster,     {.i = +1 } },
-	{ MODKEY,                       0x44/*XK_d*/,      incnmaster,     {.i = -1 } },
-	{ MODKEY,                       0x48/*XK_h*/,      setmfact,       {.f = -0.05} },
-	{ MODKEY,                       0x4C/*XK_l*/,      setmfact,       {.f = +0.05} },
-	{ MODKEY,                       VK_RETURN/*XK_Return*/, zoom,           {0} },
-	{ MODKEY,                       VK_TAB/*XK_Tab*/,    view,           {0} },
-	{ MODKEY|MOD_SHIFT,             0x43/*XK_c*/,      killclient,     {0} },
-	{ MODKEY,                       0x54/*XK_t*/,      setlayout,      {.v = &layouts[0]} },
-	{ MODKEY,                       0x46/*XK_f*/,      setlayout,      {.v = &layouts[1]} },
-	{ MODKEY,                       0x4D/*XK_m*/,      setlayout,      {.v = &layouts[2]} },
-	{ MODKEY,                       VK_SPACE/*XK_space*/,  setlayout,      {0} },
-	{ MODKEY|MOD_SHIFT,             VK_SPACE/*XK_space*/,  togglefloating, {0} },
-	{ MODKEY,                       0x4E/*n*/,       toggleborder,        {0} },
-	{ MODKEY,                       0x45/*e*/,       toggleexplorer,      {0} },
-	{ MODKEY,                       0x30/*XK_0*/,      view,           {.ui = ~0 } },
-	{ MODKEY|MOD_SHIFT,             0x30/*XK_0*/,      tag,            {.ui = ~0 } },
-	{ MODKEY,                       VK_OEM_COMMA/*XK_comma*/,  focusmon,       {.i = -1 } },
-	{ MODKEY,                       VK_OEM_PERIOD/*XK_period*/, focusmon,       {.i = +1 } },
-	{ MODKEY|MOD_SHIFT,             VK_OEM_COMMA/*XK_comma*/,  tagmon,         {.i = -1 } },
-	{ MODKEY|MOD_SHIFT,             VK_OEM_PERIOD/*XK_period*/, tagmon,         {.i = +1 } },
-	TAGKEYS(                        0x31/*XK_1*/,                      0)
-	TAGKEYS(                        0x32/*XK_2*/,                      1)
-	TAGKEYS(                        0x33/*XK_3*/,                      2)
-	TAGKEYS(                        0x34/*XK_4*/,                      3)
-	TAGKEYS(                        0x35/*XK_5*/,                      4)
-	TAGKEYS(                        0x36/*XK_6*/,                      5)
-	TAGKEYS(                        0x37/*XK_7*/,                      6)
-	TAGKEYS(                        0x38/*XK_8*/,                      7)
-	TAGKEYS(                        0x39/*XK_9*/,                      8)
-	{ MODKEY|MOD_SHIFT,             0x51/*XK_q*/,      quit,           {0} },
-};
-#endif
+
 
 /* button definitions */
-#if USE_XLIB
+static Button buttons[] = {
 	/* click                event mask      button          function        argument */
 	{ ClkLtSymbol,          0,              Button1,        setlayout,      {0} },
 	{ ClkLtSymbol,          0,              Button3,        setlayout,      {.v = &layouts[2]} },
@@ -183,18 +168,4 @@ static Key keys[] = {
 	{ ClkTagBar,            0,              Button3,        toggleview,     {0} },
 	{ ClkTagBar,            MODKEY,         Button1,        tag,            {0} },
 	{ ClkTagBar,            MODKEY,         Button3,        toggletag,      {0} },
-#elif USE_WINAPI
-	/* click                event mask      button          function        argument */
-	{ ClkLtSymbol,          0,              WM_LBUTTONDOWN,        setlayout,      {0} },
-	{ ClkLtSymbol,          0,              WM_RBUTTONDOWN,        setlayout,      {.v = &layouts[2]} },
-	{ ClkWinTitle,          0,              WM_MBUTTONDOWN,        zoom,           {0} },
-	{ ClkStatusText,        0,              WM_MBUTTONDOWN,        spawn,          {.v = termcmd } },
-	{ ClkClientWin,         MODKEY,         WM_LBUTTONDOWN,        movemouse,      {0} },
-	{ ClkClientWin,         MODKEY,         WM_MBUTTONDOWN,        togglefloating, {0} },
-	{ ClkClientWin,         MODKEY,         WM_RBUTTONDOWN,        resizemouse,    {0} },
-	{ ClkTagBar,            0,              WM_LBUTTONDOWN,        view,           {0} },
-	{ ClkTagBar,            0,              WM_RBUTTONDOWN,        toggleview,     {0} },
-	{ ClkTagBar,            MODKEY,         WM_LBUTTONDOWN,        tag,            {0} },
-	{ ClkTagBar,            MODKEY,         WM_RBUTTONDOWN,        toggletag,      {0} },
-#endif
-
+};
