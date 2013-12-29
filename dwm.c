@@ -1885,7 +1885,6 @@ VOID CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
 {
 	updatestatus();
 	PostMessage(barhwnd, WM_PAINT, 0, 0);
-	updatebar();
 }
 
 #if USE_WINAPI

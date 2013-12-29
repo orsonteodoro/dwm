@@ -197,6 +197,10 @@ drw_setscheme(Drw *drw, ClrScheme *scheme) {
 void
 drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int empty, int invert) {
 	int dx;
+#if USE_WINAPI
+	RECT r;
+	HBRUSH hbr;
+#endif
 
 	if(!drw || !drw->font || !drw->scheme)
 		return;
@@ -211,10 +215,10 @@ drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int
 		XFillRectangle(drw->dpy, drw->drawable, drw->gc, x+1, y+1, dx+1, dx+1);
 #elif USE_WINAPI
 	{
-		RECT r;
-		HBRUSH hbr = CreateSolidBrush(invert ? drw->scheme->fg->rgb : drw->scheme->bg->rgb); /* bbggrr */
+		hbr = CreateSolidBrush(invert ? drw->scheme->fg->rgb : drw->scheme->bg->rgb); /* bbggrr */
 		SetRect(&r, x+1, y+1, x+1 + dx+1, y+1 + dx+1);
 		FillRect(drw->drawable, &r, hbr);
+		DeleteObject(hbr);
 	}
 #endif
 	else if(empty)
@@ -230,6 +234,10 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, const char *tex
 	char buf[256];
 	int i, tx, ty, th, len, olen;
 	Extnts tex;
+#if USE_WINAPI
+	HBRUSH hbr;
+	RECT r;
+#endif
 
 	if(!drw || !drw->scheme)
 		return;
@@ -237,12 +245,10 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, const char *tex
 	XSetForeground(drw->dpy, drw->gc, invert ? drw->scheme->fg->rgb : drw->scheme->bg->rgb);
 	XFillRectangle(drw->dpy, drw->drawable, drw->gc, x, y, w, h);
 #elif USE_WINAPI
-	{
-		RECT r;
-		HBRUSH hbr = CreateSolidBrush(invert ? drw->scheme->fg->rgb : drw->scheme->bg->rgb); /* bbggrr */
-		SetRect(&r, x, y, x + w, y + h);
-		FillRect(drw->drawable, &r, hbr);
-	}
+	hbr = CreateSolidBrush(invert ? drw->scheme->fg->rgb : drw->scheme->bg->rgb); /* bbggrr */
+	SetRect(&r, x, y, x + w, y + h);
+	FillRect(drw->drawable, &r, hbr);
+	DeleteObject(hbr);
 #endif
 	if(!text || !drw->font)
 		return;
