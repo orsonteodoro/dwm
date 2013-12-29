@@ -20,6 +20,11 @@
  *
  * To understand everything else, start reading main().
  */
+#if USE_WINAPI
+#define WIN32_LEAN_AND_MEAN
+#define _WIN32_WINNT			0x0500
+#endif
+
 #include <errno.h>
 #include <locale.h>
 #include <stdarg.h>
@@ -30,6 +35,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#if USE_XLIB
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 #include <X11/Xatom.h>
@@ -39,6 +45,13 @@
 #ifdef XINERAMA
 #include <X11/extensions/Xinerama.h>
 #endif /* XINERAMA */
+#elif USE_WINAPI
+#include <windows.h>
+#include <winuser.h>
+#include <shellapi.h>
+#include <stdlib.h>
+#define NAME					"dwm-win32" 	/* Used for window name/class */
+#endif
 
 #include "drw.h"
 #include "util.h"
@@ -54,7 +67,38 @@
 #define WIDTH(X)                ((X)->w + 2 * (X)->bw)
 #define HEIGHT(X)               ((X)->h + 2 * (X)->bw)
 #define TAGMASK                 ((1 << LENGTH(tags)) - 1)
+#if USE_XLIB
 #define TEXTW(X)                (drw_font_getexts_width(drw->font, X, strlen(X)) + drw->font->h)
+#elif USE_WINAPI
+#define TEXTW(X)                (drw_font_getexts_width(drw, drw->font, X, strlen(X)) + drw->font->h)
+#endif
+
+/* for portibility */
+#if USE_WINAPI
+#define Window HWND
+#define XWindowAttributes int
+#define True TRUE
+#define False FALSE
+#define Bool BOOL
+#define bool BOOL
+#define Window HWND
+#define Atom int
+#define Display void*
+#define true TRUE
+#define false FALSE
+#define XA_WM_NAME 0
+#define XA_WINDOW 0
+#define XA_ATOM 0
+#define XA_STRING 0
+#define None 0
+#endif
+
+#if USE_WINAPI
+/* Shell hook stuff */
+
+typedef BOOL (*RegisterShellHookWindowProc) (HWND);
+RegisterShellHookWindowProc _RegisterShellHookWindow;
+#endif
 
 /* enums */
 enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
@@ -92,15 +136,30 @@ struct Client {
 	int bw, oldbw;
 	unsigned int tags;
 	Bool isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen;
+	Bool isalive;
+	Bool wasvisible;
+	Bool ignore;
+	Bool isminimized;
+	Bool border;
 	Client *next;
 	Client *snext;
 	Monitor *mon;
+#if USE_WINAPI
+	HWND hwnd;
+	HWND parent;
+	HWND root;
+	DWORD threadid;
+#endif
 	Window win;
 };
 
 typedef struct {
 	unsigned int mod;
+#if USE_XLIB
 	KeySym keysym;
+#elif USE_WINAPI
+	DWORD keysym;
+#endif
 	void (*func)(const Arg *);
 	const Arg arg;
 } Key;
@@ -147,26 +206,38 @@ static void arrange(Monitor *m);
 static void arrangemon(Monitor *m);
 static void attach(Client *c);
 static void attachstack(Client *c);
+#if USE_XLIB
 static void buttonpress(XEvent *e);
+#endif
 static void checkotherwm(void);
 static void cleanup(void);
 static void cleanupmon(Monitor *mon);
 static void clearurgent(Client *c);
+#if USE_XLIB
 static void clientmessage(XEvent *e);
+#endif
 static void configure(Client *c);
+#if USE_XLIB
 static void configurenotify(XEvent *e);
 static void configurerequest(XEvent *e);
+#endif
 static Monitor *createmon(void);
+#if USE_XLIB
 static void destroynotify(XEvent *e);
+#endif
 static void detach(Client *c);
 static void detachstack(Client *c);
 static Monitor *dirtomon(int dir);
 static void drawbar(Monitor *m);
 static void drawbars(void);
+#if USE_XLIB
 static void enternotify(XEvent *e);
 static void expose(XEvent *e);
+#endif
 static void focus(Client *c);
+#if USE_XLIB
 static void focusin(XEvent *e);
+#endif
 static void focusmon(const Arg *arg);
 static void focusstack(const Arg *arg);
 static Bool getrootptr(int *x, int *y);
@@ -175,17 +246,32 @@ static Bool gettextprop(Window w, Atom atom, char *text, unsigned int size);
 static void grabbuttons(Client *c, Bool focused);
 static void grabkeys(void);
 static void incnmaster(const Arg *arg);
+#if USE_XLIB
 static void keypress(XEvent *e);
+#elif USE_WINAPI
+static void keypress(WPARAM wParam);
+#endif
 static void killclient(const Arg *arg);
+#if USE_WINAPI
+static Client * managechildwindows(Client *p);
+#endif
+#if USE_XLIB
 static void manage(Window w, XWindowAttributes *wa);
 static void mappingnotify(XEvent *e);
 static void maprequest(XEvent *e);
+#elif USE_WINAPI
+static Client *manage(Window w, XWindowAttributes *wa);
+#endif
 static void monocle(Monitor *m);
+#if USE_XLIB
 static void motionnotify(XEvent *e);
+#endif
 static void movemouse(const Arg *arg);
 static Client *nexttiled(Client *c);
 static void pop(Client *);
+#if USE_XLIB
 static void propertynotify(XEvent *e);
+#endif
 static void quit(const Arg *arg);
 static Monitor *recttomon(int x, int y, int w, int h);
 static void resize(Client *c, int x, int y, int w, int h, Bool interact);
@@ -193,7 +279,11 @@ static void resizeclient(Client *c, int x, int y, int w, int h);
 static void resizemouse(const Arg *arg);
 static void restack(Monitor *m);
 static void run(void);
+#if USE_XLIB
 static void scan(void);
+#elif USE_WINAPI
+static BOOL CALLBACK scan(HWND hwnd, LPARAM lParam);
+#endif
 static Bool sendevent(Client *c, Atom proto);
 static void sendmon(Client *c, Monitor *m);
 static void setclientstate(Client *c, long state);
@@ -201,7 +291,14 @@ static void setfocus(Client *c);
 static void setfullscreen(Client *c, Bool fullscreen);
 static void setlayout(const Arg *arg);
 static void setmfact(const Arg *arg);
+#if USE_XLIB
 static void setup(void);
+#elif USE_WINAPI
+static void setup(HINSTANCE hInstance);
+#endif
+#if USE_WINAPI
+void setupbar(HINSTANCE hInstance);
+#endif
 static void showhide(Client *c);
 static void sigchld(int unused);
 static void spawn(const Arg *arg);
@@ -209,13 +306,22 @@ static void tag(const Arg *arg);
 static void tagmon(const Arg *arg);
 static void tile(Monitor *);
 static void togglebar(const Arg *arg);
+#if USE_WINAPI
+static void toggleborder(const Arg *arg);
+static void toggleexplorer(const Arg *arg);
+#endif
 static void togglefloating(const Arg *arg);
 static void toggletag(const Arg *arg);
 static void toggleview(const Arg *arg);
 static void unfocus(Client *c, Bool setfocus);
 static void unmanage(Client *c, Bool destroyed);
+#if USE_XLIB
 static void unmapnotify(XEvent *e);
+#endif
 static Bool updategeom(void);
+#if USE_WINAPI
+static void updatebar(void);
+#endif
 static void updatebarpos(Monitor *m);
 static void updatebars(void);
 static void updateclientlist(void);
@@ -228,21 +334,37 @@ static void updatewmhints(Client *c);
 static void view(const Arg *arg);
 static Client *wintoclient(Window w);
 static Monitor *wintomon(Window w);
+#if USE_XLIB
 static int xerror(Display *dpy, XErrorEvent *ee);
 static int xerrordummy(Display *dpy, XErrorEvent *ee);
 static int xerrorstart(Display *dpy, XErrorEvent *ee);
+#endif
 static void zoom(const Arg *arg);
+#if USE_WINAPI
+static Client *getclient(HWND hwnd);
+static LPSTR getclienttitle(HWND hwnd);
+static HWND getroot(HWND hwnd);
+static void setselected(Client *c);
+static void setvisibility(HWND hwnd, bool visibility);
+#endif
 
 /* variables */
+#if USE_WINAPI
+static UINT shellhookid;	/* Window Message id */
+static HWND dwmhwnd, barhwnd;
+#endif
 static const char broken[] = "broken";
 static char stext[256];
 static int screen;
 static int sw, sh;           /* X display screen geometry width, height */
 static int bh, blw = 0;      /* bar geometry */
+#if USE_XLIB
 static int (*xerrorxlib)(Display *, XErrorEvent *);
+#endif
 static unsigned int numlockmask = 0;
+#if USE_XLIB
 static void (*handler[LASTEvent]) (XEvent *) = {
-	[ButtonPress] = buttonpress,
+	[ButtonPress] = buttonpress, /* important */
 	[ClientMessage] = clientmessage,
 	[ConfigureRequest] = configurerequest,
 	[ConfigureNotify] = configurenotify,
@@ -250,13 +372,14 @@ static void (*handler[LASTEvent]) (XEvent *) = {
 	[EnterNotify] = enternotify,
 	[Expose] = expose,
 	[FocusIn] = focusin,
-	[KeyPress] = keypress,
+	[KeyPress] = keypress, /* important */
 	[MappingNotify] = mappingnotify,
 	[MapRequest] = maprequest,
 	[MotionNotify] = motionnotify,
 	[PropertyNotify] = propertynotify,
 	[UnmapNotify] = unmapnotify
 };
+#endif
 static Atom wmatom[WMLast], netatom[NetLast];
 static Bool running = True;
 static Cur *cursor[CurLast];
@@ -266,12 +389,113 @@ static Drw *drw;
 static Fnt *fnt;
 static Monitor *mons, *selmon;
 static Window root;
+#if USE_WINAPI
+static HWND dwmhwnd, barhwnd;
+//static int wx, wy, ww, wh; /* window area geometry x, y, width, height, bar excluded */
+static int sx, sy, sw, sh; /* X display screen geometry x, y, width, height */ 
+
+void
+eprint(const char *errstr, ...) {
+	va_list ap;
+
+	va_start(ap, errstr);
+	vfprintf(stderr, errstr, ap);
+	fflush(stderr);
+	va_end(ap);
+}
+
+#ifdef NDEBUG
+# define debug(format, args...) do { } while(false)
+#else
+# define debug eprint
+#endif
+#endif
 
 /* configuration, allows nested code to access above variables */
 #include "config.h"
 
 /* compile-time check if all tags fit into an unsigned int bit array. */
 struct NumTags { char limitexceeded[LENGTH(tags) > 31 ? -1 : 1]; };
+
+
+#if USE_WINAPI
+void
+setselected(Client *c) {
+	if(!c || !ISVISIBLE(c))
+		for(c = selmon->stack; c && !ISVISIBLE(c); c = c->snext);
+	if(c->mon->sel && c->mon->sel != c)
+		drawborder(c->mon->sel, normbordercolor);
+	if(c) {
+		if(c->isurgent)
+			clearurgent(c);
+		detachstack(c);
+		attachstack(c);
+		drawborder(c, selbordercolor);
+		c->mon->sel = c;
+		drawbar(c->mon);
+	}
+}
+#endif
+
+#if USE_WINAPI
+void
+setborder(Client *c, bool border) {
+	if (border) {
+		SetWindowLong(c->hwnd, GWL_STYLE, (GetWindowLong(c->hwnd, GWL_STYLE) | (WS_CAPTION | WS_SIZEBOX)));
+	} else {		
+		/* XXX: ideally i would like to use the standard window border facilities and just modify the 
+		 *      color with SetSysColor but this only seems to work if we leave WS_SIZEBOX enabled which
+		 *      is not optimal.
+		 */
+		SetWindowLong(c->hwnd, GWL_STYLE, (GetWindowLong(c->hwnd, GWL_STYLE) & ~(WS_CAPTION | WS_SIZEBOX)) | WS_BORDER | WS_THICKFRAME);
+		SetWindowLong(c->hwnd, GWL_EXSTYLE, (GetWindowLong(c->hwnd, GWL_EXSTYLE) & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE)));
+	}
+	SetWindowPos(c->hwnd, 0, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER );
+	c->border = border;
+}
+#endif
+
+#if USE_WINAPI
+void
+drawborder(Client *c, COLORREF color) {
+#if 0
+	HDC hdc = GetWindowDC(c->hwnd);
+
+#if 0
+	/* this would be another way, but it uses standard sytem colors */
+	RECT area = { .left = 0, .top = 0, .right = c->w, .bottom = c->h };
+	DrawEdge(hdc, &area, BDR_RAISEDOUTER | BDR_SUNKENINNER, BF_RECT);
+#else
+	HPEN pen = CreatePen(PS_SOLID, borderpx, color);
+	SelectObject(hdc, pen);
+	MoveToEx(hdc, 0, 0, NULL);
+	LineTo(hdc, c->w, 0);
+	LineTo(hdc, c->w, c->h);
+	LineTo(hdc, 0, c->h);
+	LineTo(hdc, 0, 0);
+	DeleteObject(pen);
+#endif
+
+	ReleaseDC(c->hwnd, hdc);
+#endif
+}
+#endif
+
+#if USE_WINAPI
+LPSTR
+getclientclassname(HWND hwnd) {
+	static TCHAR buf[128];
+	GetClassName(hwnd, buf, sizeof buf);
+	return buf;
+}
+
+LPSTR
+getclienttitle(HWND hwnd) {
+	static TCHAR buf[128];
+	GetWindowText(hwnd, buf, sizeof buf);
+	return buf;
+}
+#endif
 
 /* function implementations */
 void
@@ -280,13 +504,22 @@ applyrules(Client *c) {
 	unsigned int i;
 	const Rule *r;
 	Monitor *m;
+	LPSTR cn, ct;
+#if USE_XLIB
 	XClassHint ch = { NULL, NULL };
+#elif USE_WINAPI
+#endif
 
 	/* rule matching */
 	c->isfloating = c->tags = 0;
+#if USE_XLIB
 	XGetClassHint(dpy, c->win, &ch);
 	class    = ch.res_class ? ch.res_class : broken;
 	instance = ch.res_name  ? ch.res_name  : broken;
+#elif USE_WINAPI
+	class    = (cn = getclientclassname(c->win)) ? cn : broken;
+	instance = (ct = getclienttitle(c->win))     ? ct : broken;
+#endif
 
 	for(i = 0; i < LENGTH(rules); i++) {
 		r = &rules[i];
@@ -301,10 +534,14 @@ applyrules(Client *c) {
 				c->mon = m;
 		}
 	}
+#if USE_XLIB
 	if(ch.res_class)
 		XFree(ch.res_class);
 	if(ch.res_name)
 		XFree(ch.res_name);
+#elif USE_WINAPI
+#endif
+	c->tags = c->mon->tagset[c->mon->seltags];
 	c->tags = c->tags & TAGMASK ? c->tags & TAGMASK : c->mon->tagset[c->mon->seltags];
 }
 
@@ -406,6 +643,7 @@ attachstack(Client *c) {
 	c->mon->stack = c;
 }
 
+#if USE_XLIB
 void
 buttonpress(XEvent *e) {
 	unsigned int i, x, click;
@@ -446,15 +684,53 @@ buttonpress(XEvent *e) {
 		&& CLEANMASK(buttons[i].mask) == CLEANMASK(ev->state))
 			buttons[i].func(click == ClkTagBar && buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
 }
+#elif USE_WINAPI
+void
+buttonpress(unsigned int button, POINTS *point) {
+	unsigned int i, x, click;
+	Arg arg = {0};
+
+	/* XXX: hack */
+	drw->hdc = GetWindowDC(barhwnd);
+
+	i = x = 0;
+
+	do { x += TEXTW(tags[i]); } while(point->x >= x && ++i < LENGTH(tags));
+	if(i < LENGTH(tags)) {
+		click = ClkTagBar;
+		arg.ui = 1 << i;
+	}
+	else if(point->x < x + blw)
+		click = ClkLtSymbol;
+	else if(point->x > selmon->wx + selmon->ww - TEXTW(stext))
+		click = ClkStatusText;
+	else
+		click = ClkWinTitle;
+
+	if (GetKeyState(VK_SHIFT) < 0)
+		return;
+
+	for(i = 0; i < LENGTH(buttons); i++) {
+		if(click == buttons[i].click && buttons[i].func && buttons[i].button == button
+			&& (!buttons[i].mask || GetKeyState(buttons[i].mask) < 0)) {
+			buttons[i].func(click == ClkTagBar && buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
+			break;
+		}
+	}
+}
+#endif
 
 void
 checkotherwm(void) {
+#if USE_XLIB
 	xerrorxlib = XSetErrorHandler(xerrorstart);
 	/* this causes an error if some other window manager is running */
 	XSelectInput(dpy, DefaultRootWindow(dpy), SubstructureRedirectMask);
 	XSync(dpy, False);
 	XSetErrorHandler(xerror);
 	XSync(dpy, False);
+#elif USE_WINAPI
+#endif
 }
 
 void
@@ -463,12 +739,18 @@ cleanup(void) {
 	Layout foo = { "", NULL };
 	Monitor *m;
 
+#if USE_WINAPI
+	KillTimer(barhwnd, 1);
+#endif
+
 	view(&a);
 	selmon->lt[selmon->sellt] = &foo;
 	for(m = mons; m; m = m->next)
 		while(m->stack)
 			unmanage(m->stack, False);
+#if USE_XLIB
 	XUngrabKey(dpy, AnyKey, AnyModifier, root);
+#endif
 	while(mons)
 		cleanupmon(mons);
 	drw_cur_free(drw, cursor[CurNormal]);
@@ -482,9 +764,20 @@ cleanup(void) {
 	drw_clr_free(scheme[SchemeSel].bg);
 	drw_clr_free(scheme[SchemeSel].fg);
 	drw_free(drw);
+#if USE_XLIB
 	XSync(dpy, False);
 	XSetInputFocus(dpy, PointerRoot, RevertToPointerRoot, CurrentTime);
 	XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
+#endif
+#if USE_WINAPI
+	HWND hwnd = FindWindow("Progman", "Program Manager");
+	if (hwnd)
+		setvisibility(hwnd, TRUE);
+
+	hwnd = FindWindow("Shell_TrayWnd", NULL);
+	if (hwnd)
+		setvisibility(hwnd, TRUE);
+#endif
 }
 
 void
@@ -497,13 +790,16 @@ cleanupmon(Monitor *mon) {
 		for(m = mons; m && m->next != mon; m = m->next);
 		m->next = mon->next;
 	}
+#if USE_XLIB
 	XUnmapWindow(dpy, mon->barwin);
 	XDestroyWindow(dpy, mon->barwin);
+#endif
 	free(mon);
 }
 
 void
 clearurgent(Client *c) {
+#if USE_XLIB
 	XWMHints *wmh;
 
 	c->isurgent = False;
@@ -512,8 +808,11 @@ clearurgent(Client *c) {
 	wmh->flags &= ~XUrgencyHint;
 	XSetWMHints(dpy, c->win, wmh);
 	XFree(wmh);
+#elif USE_WINAPI
+#endif
 }
 
+#if USE_XLIB
 void
 clientmessage(XEvent *e) {
 	XClientMessageEvent *cme = &e->xclient;
@@ -534,9 +833,11 @@ clientmessage(XEvent *e) {
 		pop(c);
 	}
 }
+#endif
 
 void
 configure(Client *c) {
+#if USE_XLIB
 	XConfigureEvent ce;
 
 	ce.type = ConfigureNotify;
@@ -551,8 +852,11 @@ configure(Client *c) {
 	ce.above = None;
 	ce.override_redirect = False;
 	XSendEvent(dpy, c->win, False, StructureNotifyMask, (XEvent *)&ce);
+#use USE_WINAPI
+#endif
 }
 
+#if USE_XLIB
 void
 configurenotify(XEvent *e) {
 	Monitor *m;
@@ -574,7 +878,9 @@ configurenotify(XEvent *e) {
 		}
 	}
 }
+#endif
 
+#if USE_XLIB
 void
 configurerequest(XEvent *e) {
 	Client *c;
@@ -627,6 +933,7 @@ configurerequest(XEvent *e) {
 	}
 	XSync(dpy, False);
 }
+#endif
 
 Monitor *
 createmon(void) {
@@ -642,9 +949,12 @@ createmon(void) {
 	m->lt[0] = &layouts[0];
 	m->lt[1] = &layouts[1 % LENGTH(layouts)];
 	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
+#if USE_WINAPI
+#endif
 	return m;
 }
 
+#if USE_XLIB
 void
 destroynotify(XEvent *e) {
 	Client *c;
@@ -653,6 +963,7 @@ destroynotify(XEvent *e) {
 	if((c = wintoclient(ev->window)))
 		unmanage(c, True);
 }
+#endif
 
 void
 detach(Client *c) {
@@ -717,7 +1028,11 @@ drawbar(Monitor *m) {
 	xx = x;
 	if(m == selmon) { /* status is only drawn on selected monitor */
 		w = TEXTW(stext);
+#if USE_XLIB
+		x = m->ww - w*2;
+#elif USE_WINAPI
 		x = m->ww - w;
+#endif
 		if(x < xx) {
 			x = xx;
 			w = m->ww - xx;
@@ -749,6 +1064,33 @@ drawbars(void) {
 		drawbar(m);
 }
 
+#if USE_WINAPI
+void
+toggleborder(const Arg *arg) {
+	if (!selmon->sel)
+		return;
+	setborder(selmon->sel, !selmon->sel->border);
+}
+#endif
+
+#if USE_WINAPI
+void
+toggleexplorer(const Arg *arg) {
+	HWND hwnd = FindWindow("Progman", "Program Manager");
+	if (hwnd)
+		setvisibility(hwnd, !IsWindowVisible(hwnd));
+
+	hwnd = FindWindow("Shell_TrayWnd", NULL);
+	if (hwnd)
+		setvisibility(hwnd, !IsWindowVisible(hwnd));
+	
+	updategeom();
+	updatebar();
+	arrange(selmon);		
+}
+#endif
+
+#if USE_XLIB
 void
 enternotify(XEvent *e) {
 	Client *c;
@@ -767,7 +1109,9 @@ enternotify(XEvent *e) {
 		return;
 	focus(c);
 }
+#endif
 
+#if USE_XLIB
 void
 expose(XEvent *e) {
 	Monitor *m;
@@ -776,9 +1120,11 @@ expose(XEvent *e) {
 	if(ev->count == 0 && (m = wintomon(ev->window)))
 		drawbar(m);
 }
+#endif
 
 void
 focus(Client *c) {
+#if USE_XLIB
 	if(!c || !ISVISIBLE(c))
 		for(c = selmon->stack; c && !ISVISIBLE(c); c = c->snext);
 	/* was if(selmon->sel) */
@@ -801,8 +1147,15 @@ focus(Client *c) {
 	}
 	selmon->sel = c;
 	drawbars();
+#elif USE_WINAPI
+	setselected(c);
+	if (selmon->sel)
+		SetForegroundWindow(selmon->sel->hwnd);
+#endif
+	
 }
 
+#if USE_XLIB
 void
 focusin(XEvent *e) { /* there are some broken focus acquiring clients */
 	XFocusChangeEvent *ev = &e->xfocus;
@@ -810,6 +1163,7 @@ focusin(XEvent *e) { /* there are some broken focus acquiring clients */
 	if(selmon->sel && ev->window != selmon->sel->win)
 		setfocus(selmon->sel);
 }
+#endif
 
 void
 focusmon(const Arg *arg) {
@@ -853,6 +1207,7 @@ focusstack(const Arg *arg) {
 
 Atom
 getatomprop(Client *c, Atom prop) {
+#if USE_XLIB
 	int di;
 	unsigned long dl;
 	unsigned char *p = NULL;
@@ -864,21 +1219,27 @@ getatomprop(Client *c, Atom prop) {
 		XFree(p);
 	}
 	return atom;
+#elif USE_WINAPI
+#endif
 }
 
 Bool
 getrootptr(int *x, int *y) {
+#if USE_XLIB
 	int di;
 	unsigned int dui;
 	Window dummy;
 
 	return XQueryPointer(dpy, root, &dummy, &dummy, x, y, &di, &di, &dui);
+#elif USE_WINAPI
+#endif
 }
 
 long
 getstate(Window w) {
 	int format;
 	long result = -1;
+#if USE_XLIB
 	unsigned char *p = NULL;
 	unsigned long n, extra;
 	Atom real;
@@ -889,17 +1250,21 @@ getstate(Window w) {
 	if(n != 0)
 		result = *p;
 	XFree(p);
+#elif USE_WINAPI
+#endif
 	return result;
 }
 
 Bool
 gettextprop(Window w, Atom atom, char *text, unsigned int size) {
+#if USE_XLIB
 	char **list = NULL;
 	int n;
 	XTextProperty name;
 
 	if(!text || size == 0)
 		return False;
+
 	text[0] = '\0';
 	XGetTextProperty(dpy, w, &name, atom);
 	if(!name.nitems)
@@ -914,11 +1279,16 @@ gettextprop(Window w, Atom atom, char *text, unsigned int size) {
 	}
 	text[size - 1] = '\0';
 	XFree(name.value);
+#elif USE_WINAPI
+	const char *title;
+	strncpy(text, title = getclienttitle(w), size - 1);
+#endif
 	return True;
 }
 
 void
 grabbuttons(Client *c, Bool focused) {
+#if USE_XLIB
 	updatenumlockmask();
 	{
 		unsigned int i, j;
@@ -937,10 +1307,12 @@ grabbuttons(Client *c, Bool focused) {
 			XGrabButton(dpy, AnyButton, AnyModifier, c->win, False,
 			            BUTTONMASK, GrabModeAsync, GrabModeSync, None, None);
 	}
+#endif
 }
 
 void
 grabkeys(void) {
+#if USE_XLIB
 	updatenumlockmask();
 	{
 		unsigned int i, j;
@@ -954,6 +1326,12 @@ grabkeys(void) {
 					XGrabKey(dpy, code, keys[i].mod | modifiers[j], root,
 						 True, GrabModeAsync, GrabModeAsync);
 	}
+#elif USE_WINAPI
+	int i;
+	for (i = 0; i < LENGTH(keys); i++) {
+		RegisterHotKey(dwmhwnd, i, keys[i].mod, keys[i].keysym);
+	}
+#endif
 }
 
 void
@@ -962,6 +1340,7 @@ incnmaster(const Arg *arg) {
 	arrange(selmon);
 }
 
+#if USE_XLIB
 #ifdef XINERAMA
 static Bool
 isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info) {
@@ -972,7 +1351,9 @@ isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info) {
 	return True;
 }
 #endif /* XINERAMA */
+#endif
 
+#if USE_XLIB
 void
 keypress(XEvent *e) {
 	unsigned int i;
@@ -987,11 +1368,20 @@ keypress(XEvent *e) {
 		&& keys[i].func)
 			keys[i].func(&(keys[i].arg));
 }
+#elif USE_WINAPI
+void
+keypress(WPARAM wParam) {
+	if (wParam >= 0 && wParam < LENGTH(keys)) {
+		keys[wParam].func(&(keys[wParam ].arg));
+	}
+}
+#endif
 
 void
 killclient(const Arg *arg) {
 	if(!selmon->sel)
 		return;
+#if USE_XLIB
 	if(!sendevent(selmon->sel, wmatom[WMDelete])) {
 		XGrabServer(dpy);
 		XSetErrorHandler(xerrordummy);
@@ -1001,18 +1391,45 @@ killclient(const Arg *arg) {
 		XSetErrorHandler(xerror);
 		XUngrabServer(dpy);
 	}
+#elif USE_WINAPI
+	PostMessage(selmon->sel->hwnd, WM_CLOSE, 0, 0);
+#endif
 }
 
+#if USE_XLIB
 void
+#elif USE_WINAPI
+Client *
+#endif
 manage(Window w, XWindowAttributes *wa) {
 	Client *c, *t = NULL;
 	Window trans = None;
+#if USE_XLIB
 	XWindowChanges wc;
-
+#elif USE_WINAPI
+	RECT r;
+#endif
 	if(!(c = calloc(1, sizeof(Client))))
 		die("fatal: could not malloc() %u bytes\n", sizeof(Client));
+#if USE_WINAPI
+	debug(" manage %s\n", getclienttitle(w));
+
+	WINDOWINFO wi = {
+		.cbSize = sizeof(WINDOWINFO),
+	};
+
+	if (!GetWindowInfo(w, &wi))
+		return NULL;
+		
+	c->hwnd = w;
+	c->threadid = GetWindowThreadProcessId(w, NULL);
+	c->parent = GetParent(w);
+	c->root = getroot(w);
+	c->isalive = true;
+#endif
 	c->win = w;
 	updatetitle(c);
+#if USE_XLIB
 	if(XGetTransientForHint(dpy, w, &trans) && (t = wintoclient(trans))) {
 		c->mon = t->mon;
 		c->tags = t->tags;
@@ -1021,12 +1438,45 @@ manage(Window w, XWindowAttributes *wa) {
 		c->mon = selmon;
 		applyrules(c);
 	}
+#elif USE_WINAPI
+	c->mon = selmon;
+	applyrules(c);
+
+	static WINDOWPLACEMENT wp = {
+		.length = sizeof(WINDOWPLACEMENT),
+		.showCmd = SW_RESTORE,
+	};
+
+	if (IsWindowVisible(c->win))
+		SetWindowPlacement(w, &wp);
+		
+	/* maybe we could also filter based on 
+	 * WS_MINIMIZEBOX and WS_MAXIMIZEBOX
+	 */
+	c->isfloating = (wi.dwStyle & WS_POPUP) || 
+		(!(wi.dwStyle & WS_MINIMIZEBOX) && !(wi.dwStyle & WS_MAXIMIZEBOX));
+
+//	debug(" window style: %d\n", wi.dwStyle);
+//	debug("     minimize: %d\n", wi.dwStyle & WS_MINIMIZEBOX);
+//	debug("     maximize: %d\n", wi.dwStyle & WS_MAXIMIZEBOX);
+//	debug("        popup: %d\n", wi.dwStyle & WS_POPUP);
+//	debug("   isfloating: %d\n", c->isfloating);
+#endif
 	/* geometry */
+#if USE_XLIB
 	c->x = c->oldx = wa->x;
 	c->y = c->oldy = wa->y;
 	c->w = c->oldw = wa->width;
 	c->h = c->oldh = wa->height;
 	c->oldbw = wa->border_width;
+#elif USE_WINAPI
+	GetWindowRect(w, &r);
+	c->x = c->oldx = r.left;
+	c->y = c->oldy = r.top;
+	c->w = c->oldw = r.right-r.left+1;
+	c->h = c->oldh = r.bottom-r.top+1;
+	c->oldbw = GetSystemMetrics(SM_CXSIZEFRAME);
+#endif
 
 	if(c->x + WIDTH(c) > c->mon->mx + c->mon->mw)
 		c->x = c->mon->mx + c->mon->mw - WIDTH(c);
@@ -1038,6 +1488,7 @@ manage(Window w, XWindowAttributes *wa) {
 	           && (c->x + (c->w / 2) < c->mon->wx + c->mon->ww)) ? bh : c->mon->my);
 	c->bw = borderpx;
 
+#if USE_XLIB
 	wc.border_width = c->bw;
 	XConfigureWindow(dpy, w, CWBorderWidth, &wc);
 	XSetWindowBorder(dpy, w, scheme[SchemeNorm].border->rgb);
@@ -1046,25 +1497,42 @@ manage(Window w, XWindowAttributes *wa) {
 	updatesizehints(c);
 	updatewmhints(c);
 	XSelectInput(dpy, w, EnterWindowMask|FocusChangeMask|PropertyChangeMask|StructureNotifyMask);
+#endif
 	grabbuttons(c, False);
 	if(!c->isfloating)
 		c->isfloating = c->oldstate = trans != None || c->isfixed;
+#if USE_XLIB
 	if(c->isfloating)
 		XRaiseWindow(dpy, c->win);
+#elif USE_WINAPI
+	if (!c->isfloating)
+		setborder(c, false);
+
+	if (c->isfloating && IsWindowVisible(w)) {
+		debug(" new floating window: x: %d y: %d w: %d h: %d\n", wi.rcWindow.left, wi.rcWindow.top, wi.rcWindow.right - wi.rcWindow.left, wi.rcWindow.bottom - wi.rcWindow.top);
+		resize(c, wi.rcWindow.left, wi.rcWindow.top, wi.rcWindow.right - wi.rcWindow.left, wi.rcWindow.bottom - wi.rcWindow.top, FALSE); /*todo fix arg*/
+	}
+#endif
 	attach(c);
 	attachstack(c);
+#if USE_XLIB
 	XChangeProperty(dpy, root, netatom[NetClientList], XA_WINDOW, 32, PropModeAppend,
 	                (unsigned char *) &(c->win), 1);
 	XMoveResizeWindow(dpy, c->win, c->x + 2 * sw, c->y, c->w, c->h); /* some windows require this */
 	setclientstate(c, NormalState);
+#endif
 	if (c->mon == selmon)
 		unfocus(selmon->sel, False);
 	c->mon->sel = c;
 	arrange(c->mon);
+#if USE_XLIB
 	XMapWindow(dpy, c->win);
+#endif
 	focus(NULL);
+	return c;
 }
 
+#if USE_XLIB
 void
 mappingnotify(XEvent *e) {
 	XMappingEvent *ev = &e->xmapping;
@@ -1073,7 +1541,9 @@ mappingnotify(XEvent *e) {
 	if(ev->request == MappingKeyboard)
 		grabkeys();
 }
+#endif
 
+#if USE_XLIB
 void
 maprequest(XEvent *e) {
 	static XWindowAttributes wa;
@@ -1086,6 +1556,7 @@ maprequest(XEvent *e) {
 	if(!wintoclient(ev->window))
 		manage(ev->window, &wa);
 }
+#endif
 
 void
 monocle(Monitor *m) {
@@ -1101,6 +1572,7 @@ monocle(Monitor *m) {
 		resize(c, m->wx, m->wy, m->ww - 2 * c->bw, m->wh - 2 * c->bw, False);
 }
 
+#if USE_XLIB
 void
 motionnotify(XEvent *e) {
 	static Monitor *mon = NULL;
@@ -1116,9 +1588,11 @@ motionnotify(XEvent *e) {
 	}
 	mon = m;
 }
+#endif
 
 void
 movemouse(const Arg *arg) {
+#if USE_XLIB
 	int x, y, ocx, ocy, nx, ny;
 	Client *c;
 	Monitor *m;
@@ -1172,6 +1646,8 @@ movemouse(const Arg *arg) {
 		selmon = m;
 		focus(NULL);
 	}
+#elif USE_WINAPI
+#endif
 }
 
 Client *
@@ -1188,6 +1664,7 @@ pop(Client *c) {
 	arrange(c->mon);
 }
 
+#if USE_XLIB
 void
 propertynotify(XEvent *e) {
 	Client *c;
@@ -1223,6 +1700,53 @@ propertynotify(XEvent *e) {
 			updatewindowtype(c);
 	}
 }
+#endif
+
+#if USE_WINAPI
+void
+setvisibility(HWND hwnd, bool visibility) {
+	SetWindowPos(hwnd, 0, 0, 0, 0, 0, (visibility ? SWP_SHOWWINDOW : SWP_HIDEWINDOW) | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+}
+#endif
+
+#if USE_XLIB
+void
+resize(Client *c, int x, int y, int w, int h, Bool interact) {
+	if(applysizehints(c, &x, &y, &w, &h, interact))
+		resizeclient(c, x, y, w, h);
+}
+#elif USE_WINAPI
+
+void
+resize(Client *c, int x, int y, int w, int h, Bool interact) {
+	if(w <= 0 && h <= 0) {
+		setvisibility(c->hwnd, false);
+		return;
+	}
+	if(x > sx + sw)
+		x = sw - WIDTH(c);
+	if(y > sy + sh)
+		y = sh - HEIGHT(c);
+	if(x + w + 2 * c->bw < sx)
+		x = sx;
+	if(y + h + 2 * c->bw < sy)
+		y = sy;
+	if(h < bh)
+		h = bh;
+	if(w < bh)
+		w = bh;
+	if(c->x != x || c->y != y || c->w != w || c->h != h) {
+		c->x = x;
+		c->y = y;
+		c->w = w;
+		c->h = h;
+		debug(" resize %d: %s: x: %d y: %d w: %d h: %d\n", c->hwnd, getclienttitle(c->hwnd), x, y, w, h);
+		SetWindowPos(c->hwnd, HWND_TOP, c->x, c->y, c->w, c->h, SWP_NOACTIVATE);
+	}
+}
+
+#endif
+
 
 void
 quit(const Arg *arg) {
@@ -1243,13 +1767,8 @@ recttomon(int x, int y, int w, int h) {
 }
 
 void
-resize(Client *c, int x, int y, int w, int h, Bool interact) {
-	if(applysizehints(c, &x, &y, &w, &h, interact))
-		resizeclient(c, x, y, w, h);
-}
-
-void
 resizeclient(Client *c, int x, int y, int w, int h) {
+#if USE_XLIB
 	XWindowChanges wc;
 
 	c->oldx = c->x; c->x = wc.x = x;
@@ -1260,10 +1779,13 @@ resizeclient(Client *c, int x, int y, int w, int h) {
 	XConfigureWindow(dpy, c->win, CWX|CWY|CWWidth|CWHeight|CWBorderWidth, &wc);
 	configure(c);
 	XSync(dpy, False);
+#elif USE_WINAPI
+#endif
 }
 
 void
 resizemouse(const Arg *arg) {
+#if USE_XLIB
 	int ocx, ocy;
 	int nw, nh;
 	Client *c;
@@ -1312,10 +1834,13 @@ resizemouse(const Arg *arg) {
 		selmon = m;
 		focus(NULL);
 	}
+#elif USE_WINAPI
+#endif
 }
 
 void
 restack(Monitor *m) {
+#if USE_XLIB
 	Client *c;
 	XEvent ev;
 	XWindowChanges wc;
@@ -1334,20 +1859,282 @@ restack(Monitor *m) {
 				wc.sibling = c->win;
 			}
 	}
+
 	XSync(dpy, False);
 	while(XCheckMaskEvent(dpy, EnterWindowMask, &ev));
+#elif USE_WINAPI
+#endif
 }
 
 void
 run(void) {
+#if USE_XLIB
 	XEvent ev;
 	/* main event loop */
 	XSync(dpy, False);
 	while(running && !XNextEvent(dpy, &ev))
 		if(handler[ev.type])
 			handler[ev.type](&ev); /* call handler */
+#elif USE_WINAPI
+	MSG msg;
+	while (running && GetMessage(&msg, NULL, 0, 0) > 0) {
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
+	}
+	cleanup();
+#endif
 }
 
+VOID CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
+{
+	updatestatus();
+	PostMessage(barhwnd, WM_PAINT, 0, 0);
+	updatebar();
+}
+
+#if USE_WINAPI
+LRESULT CALLBACK barhandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	switch (msg) {
+		case WM_CREATE:
+			updatebar();
+			break;
+		case WM_PAINT: {
+			PAINTSTRUCT ps;
+			BeginPaint(hwnd, &ps);
+			drawbar(selmon);
+			EndPaint(hwnd, &ps);
+			break;
+		}
+		case WM_LBUTTONDOWN:
+		case WM_RBUTTONDOWN:
+		case WM_MBUTTONDOWN:
+			buttonpress(msg, &MAKEPOINTS(lParam));
+			break;
+		default:
+			return DefWindowProc(hwnd, msg, wParam, lParam); 
+	}
+
+	return 0;
+}
+
+Client *
+getclient(HWND hwnd) {
+	Client *c;
+	Monitor *m;
+
+	for(m = mons; m; m = m->next)
+	for(c = m->clients; c; c = c->next)
+		if (c->hwnd == hwnd)
+			return c;
+	return NULL;
+}
+
+bool
+ismanageable(HWND hwnd){
+	if (getclient(hwnd))
+		return true;
+
+	HWND parent = GetParent(hwnd);	
+	HWND owner = GetWindow(hwnd, GW_OWNER);
+	int style = GetWindowLong(hwnd, GWL_STYLE);
+	int exstyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+	bool pok = (parent != 0 && ismanageable(parent));
+	bool istool = exstyle & WS_EX_TOOLWINDOW;
+	bool isapp = exstyle & WS_EX_APPWINDOW;
+
+	if (pok && !getclient(parent))
+		manage(parent, NULL);
+
+//	debug("ismanageable: %s\n", getclienttitle(hwnd));
+//	debug("    hwnd: %d\n", hwnd);
+//	debug("  window: %d\n", IsWindow(hwnd));
+//	debug(" visible: %d\n", IsWindowVisible(hwnd));
+//	debug("  parent: %d\n", parent);
+//	debug("parentok: %d\n", pok);
+//	debug("   owner: %d\n", owner);
+//	debug(" toolwin: %d\n", istool);
+//	debug("  appwin: %d\n", isapp);
+
+	/* XXX: should we do this? */
+	if (GetWindowTextLength(hwnd) == 0) {
+//		debug("   title: NULL\n");
+//		debug("  manage: false\n");
+		return false;
+	}
+
+	if (style & WS_DISABLED) {
+//		debug("disabled: true\n");
+//		debug("  manage: false\n");
+		return false;
+	}
+
+	/*
+	 *	WS_EX_APPWINDOW
+	 *		Forces a top-level window onto the taskbar when 
+	 *		the window is visible.
+	 *
+	 *	WS_EX_TOOLWINDOW
+	 *		Creates a tool window; that is, a window intended 
+	 *		to be used as a floating toolbar. A tool window 
+	 *		has a title bar that is shorter than a normal 
+	 *		title bar, and the window title is drawn using 
+	 *		a smaller font. A tool window does not appear in 
+	 *		the taskbar or in the dialog that appears when 
+	 *		the user presses ALT+TAB. If a tool window has 
+	 *		a system menu, its icon is not displayed on the 
+	 *		title bar. However, you can display the system 
+	 *		menu by right-clicking or by typing ALT+SPACE.
+	 */
+
+	if ((parent == 0 && IsWindowVisible(hwnd)) || pok) {
+		if ((!istool && parent == 0) || (istool && pok)) {
+//			debug("  manage: true\n");
+			return true;
+		}
+		if (isapp && parent != 0) {
+//		    debug("  manage: true\n");
+			return true;
+		}
+	}
+//	debug("  manage: false\n");
+	return false;
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	switch (msg) {
+		case WM_CREATE:
+			break;
+		case WM_CLOSE:
+			cleanup();
+			break;
+		case WM_DESTROY:
+			PostQuitMessage(0);
+			break;
+		case WM_HOTKEY:
+			keypress(wParam);
+			break;
+		default:
+			if (msg == shellhookid) { /* Handle the shell hook message */
+				Client *c = getclient((HWND)lParam);
+				switch (wParam) {
+					/* The first two events are also trigger if windows
+					 * are being hidden or shown because of a tag
+					 * switch, therefore we ignore them in this case.
+					 */
+					case HSHELL_WINDOWCREATED:
+						//MessageBox(NULL, TEXT("yes"), TEXT("dwm"),MB_OK|MB_APPLMODAL);
+						debug("window created: %s\n", getclienttitle((HWND)lParam));
+						if (!c && ismanageable((HWND)lParam)) {
+							c = manage((HWND)lParam, NULL);
+							managechildwindows(c);
+							arrange(NULL); /*CONFIRM ARG TODO */
+						}
+						break;
+					case HSHELL_WINDOWDESTROYED:
+						if (c) {
+							debug(" window %s: %s\n", c->ignore ? "hidden" : "destroyed", getclienttitle(c->hwnd));
+							if (!c->ignore)
+								unmanage(c, true);
+							else
+								c->ignore = false;
+						} else {
+							debug(" unmanaged window destroyed\n");
+						}
+						break;
+					case HSHELL_WINDOWACTIVATED:
+						debug(" window activated: %s || %d\n", c ? getclienttitle(c->hwnd) : "unknown", (HWND)lParam);
+						if (c) {
+							Client *t = selmon->sel; /*TODO CHECK */
+							managechildwindows(c);
+							setselected(c);
+							/* check if the previously selected 
+							 * window got minimized
+							 */
+							if (t && (t->isminimized = IsIconic(t->hwnd))) {
+								debug(" active window got minimized: %s\n", getclienttitle(t->hwnd));
+								arrange(NULL); /* TODO CHECK */
+							}
+							/* the newly focused window was minimized */
+							if (selmon->sel->isminimized) { /*todo check*/
+								debug(" newly active window was minimized: %s\n", getclienttitle(selmon->sel->hwnd)); /*todo: check */
+								selmon->sel->isminimized = false;								
+								zoom(NULL);
+							}
+						} else  {
+							/* Some window don't seem to generate 
+							 * HSHELL_WINDOWCREATED messages therefore 
+						 	 * we check here whether we should manage
+						 	 * the window or not.
+						 	 */
+							if (ismanageable((HWND)lParam)) {
+								c = manage((HWND)lParam, NULL);
+								managechildwindows(c);
+								setselected(c);
+								arrange(NULL); /*todo confirm arg */
+							}
+						}
+						break;
+				}
+			} else
+				return DefWindowProc(hwnd, msg, wParam, lParam); 
+	}
+
+	return 0;
+}
+
+BOOL CALLBACK 
+scan(HWND hwnd, LPARAM lParam) {
+	Client *c = getclient(hwnd);
+	if (c)
+		c->isalive = true;
+	else if (ismanageable(hwnd))
+		manage(hwnd, NULL);
+	return TRUE;
+}
+
+Client *
+nextchild(Client *p, Client *c) {
+	for(; c && c->parent != p->hwnd; c = c->next);
+	return c;
+}
+
+Client *
+managechildwindows(Client *p) {
+	Monitor *m;
+	Client *c, *t;
+	EnumChildWindows(p->hwnd, scan, 0);
+	/* remove all child windows which were not part
+	 * of the enumeration above.
+	 */
+	for(m = mons; m; m = m->next)
+	for(c = m->clients; c; ) {
+		if (c->parent == p->hwnd) {
+			/* XXX: ismanageable isn't that reliable or some
+			 *      windows change over time which means they
+			 *      were once reported as manageable but not
+			 *      this time so we also check if they are
+			 *      currently visible and if that's the case
+			 *      we keep them in our client list.
+			 */
+			if (!c->isalive && !IsWindowVisible(c->hwnd)) {
+				t = c->next;
+				unmanage(c, false); /* fixme */
+				c = t;
+				continue;
+			}
+			/* reset flag for next check */
+			c->isalive = false;
+		}
+		c = c->next;
+	}
+
+	return nextchild(p, mons->clients); /*todo check */
+}
+#endif
+
+#if USE_XLIB
 void
 scan(void) {
 	unsigned int i, num;
@@ -1373,6 +2160,7 @@ scan(void) {
 			XFree(wins);
 	}
 }
+#endif
 
 void
 sendmon(Client *c, Monitor *m) {
@@ -1393,12 +2181,16 @@ void
 setclientstate(Client *c, long state) {
 	long data[] = { state, None };
 
+#if USE_XLIB
 	XChangeProperty(dpy, c->win, wmatom[WMState], wmatom[WMState], 32,
 			PropModeReplace, (unsigned char *)data, 2);
+#elif USE_WINAPI
+#endif
 }
 
 Bool
 sendevent(Client *c, Atom proto) {
+#if USE_XLIB
 	int n;
 	Atom *protocols;
 	Bool exists = False;
@@ -1419,10 +2211,13 @@ sendevent(Client *c, Atom proto) {
 		XSendEvent(dpy, c->win, False, NoEventMask, &ev);
 	}
 	return exists;
+#elif USE_WINAPI
+#endif
 }
 
 void
 setfocus(Client *c) {
+#if USE_XLIB
 	if(!c->neverfocus) {
 		XSetInputFocus(dpy, c->win, RevertToPointerRoot, CurrentTime);
 		XChangeProperty(dpy, root, netatom[NetActiveWindow],
@@ -1430,10 +2225,13 @@ setfocus(Client *c) {
  		                (unsigned char *) &(c->win), 1);
 	}
 	sendevent(c, wmatom[WMTakeFocus]);
+#elif USE_WINAPI
+#endif
 }
 
 void
 setfullscreen(Client *c, Bool fullscreen) {
+#if USE_XLIB
 	if(fullscreen) {
 		XChangeProperty(dpy, c->win, netatom[NetWMState], XA_ATOM, 32,
 		                PropModeReplace, (unsigned char*)&netatom[NetWMFullscreen], 1);
@@ -1458,6 +2256,8 @@ setfullscreen(Client *c, Bool fullscreen) {
 		resizeclient(c, c->x, c->y, c->w, c->h);
 		arrange(c->mon);
 	}
+#elif USE_WINAPI
+#endif
 }
 
 void
@@ -1488,23 +2288,87 @@ setmfact(const Arg *arg) {
 }
 
 void
+#if USE_XLIB
 setup(void) {
 	XSetWindowAttributes wa;
+#elif USE_WINAPI
+setup(HINSTANCE hInstance) {
+	RECT wa;
+	HWND hwnd = FindWindow("Shell_TrayWnd", NULL);
+#endif
 
 	/* clean up any zombies immediately */
 	sigchld(0);
 
+#if USE_WINAPI
+	WNDCLASSEX winClass;
+
+	winClass.cbSize = sizeof(WNDCLASSEX);
+	winClass.style = 0;
+	winClass.lpfnWndProc = WndProc;
+	winClass.cbClsExtra = 0;
+	winClass.cbWndExtra = 0;
+	winClass.hInstance = hInstance;
+	winClass.hIcon = NULL;
+	winClass.hIconSm = NULL;
+	winClass.hCursor = NULL;
+	winClass.hbrBackground = NULL;
+	winClass.lpszMenuName = NULL;
+	winClass.lpszClassName = NAME;
+
+	if (!RegisterClassEx(&winClass))
+		die("Error registering window class");
+
+	dwmhwnd = CreateWindowEx(0, NAME, NAME, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, hInstance, NULL);
+
+	if (!dwmhwnd)
+		die("Error creating window");
+
+#if USE_WINAPI
+	sw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+	sh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+#endif
+#endif
+
 	/* init screen */
+#if USE_XLIB
 	screen = DefaultScreen(dpy);
 	root = RootWindow(dpy, screen);
+#elif USE_WINAPI
+	root = NULL;
+#endif
+#if USE_XLIB
 	fnt = drw_font_create(dpy, font);
+#elif USE_WINAPI
+	fnt = drw_font_create(dpy, font, dwmhwnd);
+#endif
+#if USE_XLIB
 	sw = DisplayWidth(dpy, screen);
 	sh = DisplayHeight(dpy, screen);
 	bh = fnt->h + 2;
+#elif USE_WINAPI
+	if (hwnd && IsWindowVisible(hwnd)) {	
+		SystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0);
+		sx = wa.left;
+		sy = wa.top;
+		sw = wa.right - wa.left;
+		sh = wa.bottom - wa.top;
+	} else {
+		sx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+		sy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+		sw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+		sh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+	}
+
+	bh = 20; /* XXX: fixed value */
+#endif
+	
 	drw = drw_create(dpy, screen, root, sw, sh);
 	drw_setfont(drw, fnt);
 	updategeom();
+
 	/* init atoms */
+#if USE_XLIB
 	wmatom[WMProtocols] = XInternAtom(dpy, "WM_PROTOCOLS", False);
 	wmatom[WMDelete] = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
 	wmatom[WMState] = XInternAtom(dpy, "WM_STATE", False);
@@ -1521,6 +2385,8 @@ setup(void) {
 	cursor[CurNormal] = drw_cur_create(drw, XC_left_ptr);
 	cursor[CurResize] = drw_cur_create(drw, XC_sizing);
 	cursor[CurMove] = drw_cur_create(drw, XC_fleur);
+#elif USE_WINAPI
+#endif
 	/* init appearance */
 	scheme[SchemeNorm].border = drw_clr_create(drw, normbordercolor);
 	scheme[SchemeNorm].bg = drw_clr_create(drw, normbgcolor);
@@ -1529,8 +2395,23 @@ setup(void) {
 	scheme[SchemeSel].bg = drw_clr_create(drw, selbgcolor);
 	scheme[SchemeSel].fg = drw_clr_create(drw, selfgcolor);
 	/* init bars */
+#if USE_WINAPI
+	EnumWindows(scan, 0);
+
+	setupbar(hInstance);
+	drw_resize(drw, sw, bh);
+
+	/* Get function pointer for RegisterShellHookWindow */
+	_RegisterShellHookWindow = (RegisterShellHookWindowProc)GetProcAddress(GetModuleHandle("USER32.DLL"), "RegisterShellHookWindow");
+	if (!_RegisterShellHookWindow)
+		die("Could not find RegisterShellHookWindow");
+	_RegisterShellHookWindow(dwmhwnd);
+	/* Grab a dynamic id for the SHELLHOOK message to be used later */
+	shellhookid = RegisterWindowMessage("SHELLHOOK");
+#endif
 	updatebars();
 	updatestatus();
+#if USE_XLIB
 	/* EWMH support per view */
 	XChangeProperty(dpy, root, netatom[NetSupported], XA_ATOM, 32,
 			PropModeReplace, (unsigned char *) netatom, NetLast);
@@ -1541,23 +2422,41 @@ setup(void) {
 	                |EnterWindowMask|LeaveWindowMask|StructureNotifyMask|PropertyChangeMask;
 	XChangeWindowAttributes(dpy, root, CWEventMask|CWCursor, &wa);
 	XSelectInput(dpy, root, wa.event_mask);
+#endif
+	
 	grabkeys();
 	focus(NULL);
 }
+
+
 
 void
 showhide(Client *c) {
 	if(!c)
 		return;
 	if(ISVISIBLE(c)) { /* show clients top down */
+#if USE_XLIB
 		XMoveWindow(dpy, c->win, c->x, c->y);
+#elif USE_WINAPI
+		if (c->wasvisible) {
+			setvisibility(c->hwnd, true);
+		}
+#endif
 		if((!c->mon->lt[c->mon->sellt]->arrange || c->isfloating) && !c->isfullscreen)
 			resize(c, c->x, c->y, c->w, c->h, False);
 		showhide(c->snext);
 	}
 	else { /* hide clients bottom up */
 		showhide(c->snext);
+#if USE_XLIB
 		XMoveWindow(dpy, c->win, WIDTH(c) * -2, c->y);
+#elif USE_WINAPI
+		if (IsWindowVisible(c->hwnd)) {
+			c->ignore = true;
+			c->wasvisible = true;		
+			setvisibility(c->hwnd, false);
+		}
+#endif
 	}
 }
 
@@ -1570,6 +2469,7 @@ sigchld(int unused) {
 
 void
 spawn(const Arg *arg) {
+#if USE_XLIB
 	if(arg->v == dmenucmd)
 		dmenumon[0] = '0' + selmon->num;
 	if(fork() == 0) {
@@ -1581,6 +2481,27 @@ spawn(const Arg *arg) {
 		perror(" failed");
 		exit(EXIT_SUCCESS);
 	}
+#elif USE_WINAPI
+	debug("test");
+	if(arg->v == dmenucmd)
+	{
+		int i;
+		char args[MAX_PATH] = "";
+		
+		//dmenumon[0] = '0' + selmon->num;
+		for(i = 1; ((char **)arg->v)[i] != NULL; i++)
+		{
+			if (i % 2 == 0 && i >= 2)
+				sprintf(args, "%s \"%s\"", args, ((char **)arg->v)[i]);
+			else
+				sprintf(args, "%s %s", args, ((char **)arg->v)[i]);
+		}
+		debug("cmd: %s", args);
+		ShellExecute(NULL, NULL, ((char **)arg->v)[0], args, NULL, SW_HIDE);
+	}
+	else
+		ShellExecute(NULL, NULL, ((char **)arg->v)[0], ((char **)arg->v)[1], NULL, SW_SHOWDEFAULT);
+#endif
 }
 
 void
@@ -1629,7 +2550,12 @@ void
 togglebar(const Arg *arg) {
 	selmon->showbar = !selmon->showbar;
 	updatebarpos(selmon);
+#if USE_XLIB
 	XMoveResizeWindow(dpy, selmon->barwin, selmon->wx, selmon->by, selmon->ww, bh);
+#elif USE_WINAPI
+	updategeom();
+	updatebar();
+#endif
 	arrange(selmon);
 }
 
@@ -1673,6 +2599,7 @@ toggleview(const Arg *arg) {
 
 void
 unfocus(Client *c, Bool setfocus) {
+#if USE_XLIB
 	if(!c)
 		return;
 	grabbuttons(c, False);
@@ -1681,11 +2608,14 @@ unfocus(Client *c, Bool setfocus) {
 		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
 	}
+#elif USE_WINAPI
+#endif
 }
 
 void
 unmanage(Client *c, Bool destroyed) {
 	Monitor *m = c->mon;
+ #if USE_XLIB
 	XWindowChanges wc;
 
 	/* The server grab construct avoids race conditions. */
@@ -1706,8 +2636,22 @@ unmanage(Client *c, Bool destroyed) {
 	focus(NULL);
 	updateclientlist();
 	arrange(m);
+#elif USE_WINAPI
+	debug(" unmanage %s\n", getclienttitle(c->hwnd));
+	if (c->wasvisible)
+		setvisibility(c->hwnd, true);
+	if (!c->isfloating)
+		setborder(c, true);
+	detach(c);
+	detachstack(c);
+	if(m->sel == c)
+		focus(NULL);
+	free(c);
+	arrange(m);
+#endif
 }
 
+#if USE_XLIB
 void
 unmapnotify(XEvent *e) {
 	Client *c;
@@ -1720,9 +2664,11 @@ unmapnotify(XEvent *e) {
 			unmanage(c, False);
 	}
 }
+#endif
 
 void
 updatebars(void) {
+#if USE_XLIB
 	Monitor *m;
 	XSetWindowAttributes wa = {
 		.override_redirect = True,
@@ -1738,7 +2684,76 @@ updatebars(void) {
 		XDefineCursor(dpy, m->barwin, cursor[CurNormal]->cursor);
 		XMapRaised(dpy, m->barwin);
 	}
+#elif USE_WINAPI
 }
+
+void
+updatebar(void) {
+	Monitor *m;
+	for(m = mons; m; m = m->next) {
+	//FIXME
+	SetWindowPos(barhwnd, selmon->showbar ? HWND_TOPMOST : HWND_NOTOPMOST, 0, m->by, m->ww, bh, (selmon->showbar ? SWP_SHOWWINDOW : SWP_HIDEWINDOW) | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+	}
+}
+
+void
+setupbar(HINSTANCE hInstance) {
+
+	unsigned int i, w = 0;
+
+	WNDCLASS winClass;
+	memset(&winClass, 0, sizeof winClass);
+
+	winClass.style = 0;
+	winClass.lpfnWndProc = barhandler;
+	winClass.cbClsExtra = 0;
+	winClass.cbWndExtra = 0;
+	winClass.hInstance = hInstance;
+	winClass.hIcon = NULL;
+	winClass.hCursor = LoadCursor(NULL, IDC_ARROW);
+	winClass.hbrBackground = NULL;
+	winClass.lpszMenuName = NULL;
+	winClass.lpszClassName = "dwm-bar";
+
+
+	if (!RegisterClass(&winClass))
+		die("Error registering window class");
+
+	barhwnd = CreateWindowEx(
+		WS_EX_TOOLWINDOW,
+		"dwm-bar",
+		NULL, /* window title */
+		WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 
+		0, 0, 0, 0, 
+		NULL, /* parent window */
+		NULL, /* menu */
+		hInstance,
+		NULL
+	);
+	root = barhwnd;
+	drw->gc = GetWindowDC(root); /* hack */
+	/* calculate width of the largest layout symbol */
+	drw->hdc = GetWindowDC(barhwnd);
+	//HFONT font = (HFONT)GetStockObject(SYSTEM_FONT); 
+	HFONT f = CreateFont(10,0,0,0,0,0,0,0,0,0,0,0,0,TEXT(font));
+	SelectObject(drw->hdc, f);
+
+	for(blw = i = 0; LENGTH(layouts) > 1 && i < LENGTH(layouts); i++) {
+ 		w = TEXTW(layouts[i].symbol);
+		blw = MAX(blw, w);
+	}
+
+	DeleteObject(f); 
+	ReleaseDC(barhwnd, drw->hdc);
+
+	SetTimer(barhwnd, 1, 1000, TimerProc);
+
+	PostMessage(barhwnd, WM_PAINT, 0, 0);
+	updatebar();
+}
+
+#endif
+
 
 void
 updatebarpos(Monitor *m) {
@@ -1755,6 +2770,7 @@ updatebarpos(Monitor *m) {
 
 void
 updateclientlist() {
+#if USE_XLIB
 	Client *c;
 	Monitor *m;
 
@@ -1764,12 +2780,14 @@ updateclientlist() {
 			XChangeProperty(dpy, root, netatom[NetClientList],
 			                XA_WINDOW, 32, PropModeAppend,
 			                (unsigned char *) &(c->win), 1);
+#elif USE_WINAPI
+#endif
 }
 
 Bool
 updategeom(void) {
 	Bool dirty = False;
-
+#if USE_XLIB
 #ifdef XINERAMA
 	if(XineramaIsActive(dpy)) {
 		int i, j, n, nn;
@@ -1830,6 +2848,7 @@ updategeom(void) {
 	}
 	else
 #endif /* XINERAMA */
+#endif
 	/* default monitor setup */
 	{
 		if(!mons)
@@ -1850,6 +2869,7 @@ updategeom(void) {
 
 void
 updatenumlockmask(void) {
+#if USE_XLIB
 	unsigned int i, j;
 	XModifierKeymap *modmap;
 
@@ -1861,10 +2881,13 @@ updatenumlockmask(void) {
 			   == XKeysymToKeycode(dpy, XK_Num_Lock))
 				numlockmask = (1 << i);
 	XFreeModifiermap(modmap);
+#elif USE_WINAPI
+#endif
 }
 
 void
 updatesizehints(Client *c) {
+#if USE_XLIB
 	long msize;
 	XSizeHints size;
 
@@ -1911,10 +2934,14 @@ updatesizehints(Client *c) {
 		c->maxa = c->mina = 0.0;
 	c->isfixed = (c->maxw && c->minw && c->maxh && c->minh
 	             && c->maxw == c->minw && c->maxh == c->minh);
+#elif USE_WINAPI
+#endif
 }
 
 void
 updatetitle(Client *c) {
+	if (!c)
+		return;
 	if(!gettextprop(c->win, netatom[NetWMName], c->name, sizeof c->name))
 		gettextprop(c->win, XA_WM_NAME, c->name, sizeof c->name);
 	if(c->name[0] == '\0') /* hack to mark broken clients */
@@ -1923,13 +2950,20 @@ updatetitle(Client *c) {
 
 void
 updatestatus(void) {
+#if USE_XLIB
 	if(!gettextprop(root, XA_WM_NAME, stext, sizeof(stext)))
 		strcpy(stext, "dwm-"VERSION);
+#elif USE_WINAPI
+	time_t result = time(NULL);
+	strftime(stext, 20, "%c", localtime(&result));
+	//strcpy(stext, "dwm-"VERSION);
+#endif
 	drawbar(selmon);
 }
 
 void
 updatewindowtype(Client *c) {
+#if USE_XLIB
 	Atom state = getatomprop(c, netatom[NetWMState]);
 	Atom wtype = getatomprop(c, netatom[NetWMWindowType]);
 
@@ -1937,10 +2971,13 @@ updatewindowtype(Client *c) {
 		setfullscreen(c, True);
 	if(wtype == netatom[NetWMWindowTypeDialog])
 		c->isfloating = True;
+#elif USE_WINAPI
+#endif
 }
 
 void
 updatewmhints(Client *c) {
+#if USE_XLIB
 	XWMHints *wmh;
 
 	if((wmh = XGetWMHints(dpy, c->win))) {
@@ -1956,7 +2993,21 @@ updatewmhints(Client *c) {
 			c->neverfocus = False;
 		XFree(wmh);
 	}
+#elif USE_WINAPI
+#endif
 }
+
+#if USE_WINAPI
+HWND
+getroot(HWND hwnd){
+	HWND parent, deskwnd = GetDesktopWindow();
+
+	while ((parent = GetWindow(hwnd, GW_OWNER)) != NULL && deskwnd != parent)
+		hwnd = parent;
+
+	return hwnd;
+}
+#endif
 
 void
 view(const Arg *arg) {
@@ -1997,6 +3048,7 @@ wintomon(Window w) {
 	return selmon;
 }
 
+#if USE_XLIB
 /* There's no way to check accesses to destroyed windows, thus those cases are
  * ignored (especially on UnmapNotify's).  Other types of errors call Xlibs
  * default error handler, which may call exit.  */
@@ -2016,12 +3068,16 @@ xerror(Display *dpy, XErrorEvent *ee) {
 			ee->request_code, ee->error_code);
 	return xerrorxlib(dpy, ee); /* may call exit */
 }
+#endif
 
+#if USE_XLIB
 int
 xerrordummy(Display *dpy, XErrorEvent *ee) {
 	return 0;
 }
+#endif
 
+#if USE_XLIB
 /* Startup Error handler to check if another window manager
  * is already running. */
 int
@@ -2029,6 +3085,7 @@ xerrorstart(Display *dpy, XErrorEvent *ee) {
 	die("dwm: another window manager is already running\n");
 	return -1;
 }
+#endif
 
 void
 zoom(const Arg *arg) {
@@ -2043,21 +3100,88 @@ zoom(const Arg *arg) {
 	pop(c);
 }
 
+#if USE_XLIB
 int
 main(int argc, char *argv[]) {
+#elif USE_WINAPI
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {	
+#endif
+
+#if USE_WINAPI
+	int i;
+	char **argv;
+	int argc = 0, targc = 0;
+	char buffer[512];
+	char *t;
+
+	for(i=0; i < strlen(lpCmdLine); i++)
+		if (lpCmdLine[i] == ' ')
+			targc++;
+	targc+=2;
+	argv = malloc(targc);
+	argv[argc] = "dmenu.exe";
+	argc++;
+	t = strtok(lpCmdLine, " "); 
+	targc--;
+	buffer[0] = NULL;
+	
+	fflush(stdout); /*strange bug*/
+	while(t != NULL && targc)
+	{
+		if (t[0] != '-')
+		{
+			do
+			{
+				strncat(buffer, t, 512);
+				t = strtok(NULL, " ");
+				if (t != NULL && t[0] != '-')
+					strncat(buffer, " ", 512);
+				targc--;
+			} while (t != NULL && t[0] != '-' && targc);
+			argv[argc]=strdup(buffer);
+			argc++;
+			buffer[0] = NULL;
+		}
+		else
+		{
+			argv[argc]=strdup(t);
+			argc++;
+			buffer[0] = NULL;
+			t = strtok(NULL, " ");
+			targc--;
+		}
+	}
+
+#endif
 	if(argc == 2 && !strcmp("-v", argv[1]))
 		die("dwm-"VERSION", © 2006-2012 dwm engineers, see LICENSE for details\n");
 	else if(argc != 1)
 		die("usage: dwm [-v]\n");
+#if USE_XLIB
 	if(!setlocale(LC_CTYPE, "") || !XSupportsLocale())
+#elif USE_WINAPI
+	if(!setlocale(LC_CTYPE, ""))
+#endif
 		fputs("warning: no locale support\n", stderr);
+#if USE_XLIB
 	if(!(dpy = XOpenDisplay(NULL)))
 		die("dwm: cannot open display\n");
+#endif
 	checkotherwm();
+#if USE_XLIB
 	setup();
 	scan();
+#elif USE_WINAPI
+	setup(hInstance);
+#endif
 	run();
 	cleanup();
+#if USE_XLIB
 	XCloseDisplay(dpy);
+#endif
+#if USE_WINAPI
+	free(argv);
+#endif
+
 	return EXIT_SUCCESS;
 }

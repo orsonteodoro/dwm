@@ -16,7 +16,7 @@
 #if USE_XLIB
 static const char font[]            = "-*-terminus-medium-r-*-*-16-*-*-*-*-*-*-*";
 #elif USE_WINAPI
-static const char font[]            = "System";
+static const char font[]            = "Small Font";
 #endif
 static const char normbordercolor[] = "#444444";
 static const char normbgcolor[]     = "#222222";
@@ -45,7 +45,11 @@ static const Rule rules[] = {
 /* layout(s) */
 static const float mfact      = 0.55; /* factor of master area size [0.05..0.95] */
 static const int nmaster      = 1;    /* number of clients in master area */
+#if USE_XLIB
 static const Bool resizehints = True; /* True means respect size hints in tiled resizals */
+#elif USE_WINAPI
+static const BOOL resizehints = TRUE; /* True means respect size hints in tiled resizals */
+#endif
 
 static const Layout layouts[] = {
 	/* symbol     arrange function */
@@ -74,7 +78,6 @@ static const Layout layouts[] = {
 	{ MODKEY|MOD_CONTROL|MOD_SHIFT, KEY,      toggletag,      {.ui = 1 << TAG} },
 #endif
 
-
 /* helper for spawning shell commands in the pre dwm-5.0 fashion */
 #define SHCMD(cmd) { .v = (const char*[]){ "/bin/sh", "-c", cmd, NULL } }
 
@@ -83,7 +86,7 @@ static char dmenumon[2] = "0"; /* component of dmenucmd, manipulated in spawn() 
 #if USE_XLIB
 static const char *dmenucmd[] = { "dmenu_run", "-m", dmenumon, "-fn", font, "-nb", normbgcolor, "-nf", normfgcolor, "-sb", selbgcolor, "-sf", selfgcolor, NULL };
 #elif USE_WINAPI
-static const char *dmenucmd[] = { "dmenu_run_win", "-m", dmenumon, "-fn", font, "-nb", normbgcolor, "-nf", normfgcolor, "-sb", selbgcolor, "-sf", selfgcolor, NULL };
+static const char *dmenucmd[] = { "dmenu.bat", "-m", dmenumon, "-fn", font, "-nb", normbgcolor, "-nf", normfgcolor, "-sb", selbgcolor, "-sf", selfgcolor, NULL };
 #endif
 #if USE_XLIB
 static const char *termcmd[]  = { "st", NULL };
@@ -170,6 +173,8 @@ static Key keys[] = {
 #endif
 
 /* button definitions */
+/* click can be ClkLtSymbol, ClkStatusText, ClkWinTitle, ClkClientWin, or ClkRootWin */
+static Button buttons[] = {
 #if USE_XLIB
 	/* click                event mask      button          function        argument */
 	{ ClkLtSymbol,          0,              Button1,        setlayout,      {0} },
@@ -197,4 +202,5 @@ static Key keys[] = {
 	{ ClkTagBar,            MODKEY,         WM_LBUTTONDOWN,        tag,            {0} },
 	{ ClkTagBar,            MODKEY,         WM_RBUTTONDOWN,        toggletag,      {0} },
 #endif
+};
 
