@@ -1028,11 +1028,7 @@ drawbar(Monitor *m) {
 	xx = x;
 	if(m == selmon) { /* status is only drawn on selected monitor */
 		w = TEXTW(stext);
-#if USE_XLIB
-		x = m->ww - w*2;
-#elif USE_WINAPI
 		x = m->ww - w;
-#endif
 		if(x < xx) {
 			x = xx;
 			w = m->ww - xx;
